@@ -8,11 +8,18 @@ export interface Invoice { id: string; name: string; bytes: Uint8Array; type: 'p
 export async function formPdf(draft: Draft): Promise<Uint8Array> {
   validate(draft);
   const [template, font] = await Promise.all([fetch(`/templates/${draft.kind}.pdf`).then(r => { if (!r.ok) throw Error('模板加载失败'); return r.arrayBuffer(); }), fetch('/fonts/LongunFormSans.ttf').then(r => { if (!r.ok) throw Error('中文字体加载失败'); return r.arrayBuffer(); })]);
-  const pdf = await PDFDocument.load(template); pdf.registerFontkit(fontkit);
-  const chinese = await pdf.embedFont(font, { subset: false }); const page = pdf.getPage(0);
-  for (let i = 0; i < 2; i++) for (const o of overlays(draft.kind, draft.sheets[draft.mirror ? 0 : i], !!i)) {
-    const { lines, size, top } = layout(o);
-    lines.forEach((line, index) => { const x = o.align === 'center' ? o.x + (o.w - chinese.widthOfTextAtSize(line, size)) / 2 : o.x + 2; page.drawText(line, { x, y: page.getHeight() - top - index * size * 1.35, size, font: chinese, color: rgb(0.06, 0.09, 0.08) }); });
+  const pdf = await PDFDocument.create(); pdf.registerFontkit(fontkit);
+  const source = await PDFDocument.load(template);
+  const background = await pdf.embedPage(source.getPage(0));
+  const chinese = await pdf.embedFont(font, { subset: false });
+  for (let start = 0; start < draft.sheets.length; start += 2) {
+    const page = pdf.addPage([background.width, background.height]);
+    page.drawPage(background);
+    // Only existing sheets receive data; an odd final sheet leaves the lower template unfilled.
+    for (let i = 0; i < 2 && start + i < draft.sheets.length; i++) for (const o of overlays(draft.kind, draft.sheets[start + i], !!i)) {
+      const { lines, size, top } = layout(o);
+      lines.forEach((line, index) => { const x = o.align === 'center' ? o.x + (o.w - chinese.widthOfTextAtSize(line, size)) / 2 : o.x + 2; page.drawText(line, { x, y: page.getHeight() - top - index * size * 1.35, size, font: chinese, color: rgb(0.06, 0.09, 0.08) }); });
+    }
   }
   pdf.setTitle(titles[draft.kind]); pdf.setAuthor('朗冠（上海）广告有限公司');
   return pdf.save();

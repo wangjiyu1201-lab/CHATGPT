@@ -1,11 +1,22 @@
 export type Kind = 'expense' | 'payment' | 'advance';
 export type Row = { description: string; amount: string; count: string };
 export interface Sheet { fields: Record<string, string>; rows: Row[] }
-export interface Draft { id: string; kind: Kind; title: string; sheets: [Sheet, Sheet]; mirror: boolean; updated: string }
+export interface Draft { id: string; kind: Kind; title: string; sheets: Sheet[]; updated: string }
 export const titles: Record<Kind, string> = { expense: '现金报销单', payment: '支付申请单', advance: '预支申请单' };
 export function today() { return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()); }
 export function blankSheet(): Sheet { return { fields: { date: today(), method: '网银', contract: '', invoiceType: '' }, rows: [{ description: '', amount: '', count: '' }] }; }
-export function newDraft(kind: Kind): Draft { return { id: crypto.randomUUID(), kind, title: '', sheets: [blankSheet(), blankSheet()], mirror: true, updated: new Date().toISOString() }; }
+export function newDraft(kind: Kind): Draft { return { id: crypto.randomUUID(), kind, title: '', sheets: [blankSheet(), blankSheet()], updated: new Date().toISOString() }; }
+export function restoreDraft(value: unknown): Draft | null {
+  if (!value || typeof value !== 'object') return null;
+  const d = value as Draft & { mirror?: boolean };
+  if (typeof d.id !== 'string' || !Object.hasOwn(titles, d.kind) || !Array.isArray(d.sheets) || !d.sheets.length) return null;
+  if (!d.sheets.every(s => s && typeof s.fields === 'object' && s.fields && Object.values(s.fields).every(v => typeof v === 'string') && Array.isArray(s.rows) && s.rows.length > 0 && s.rows.length <= 5 && s.rows.every(r => r && typeof r.description === 'string' && typeof r.amount === 'string' && typeof r.count === 'string'))) return null;
+  // Materialize the old synchronized copy before switching to independent sheets.
+  // The browser retains the original legacy data separately before saving this version.
+  const sheets = structuredClone(d.sheets);
+  if (d.mirror === true && sheets.length === 2) sheets[1] = structuredClone(sheets[0]);
+  return { id: d.id, kind: d.kind, title: typeof d.title === 'string' ? d.title : '', sheets, updated: typeof d.updated === 'string' ? d.updated : new Date().toISOString() };
+}
 export function cents(value: string): number {
   if (!value) return 0;
   if (!/^\d{1,6}(\.\d{0,2})?$/.test(value)) throw new Error('金额须为 0–999,999.99，最多两位小数');
@@ -25,12 +36,15 @@ export function uppercase(n: number): string {
   if (f) out += digits[f] + '分';
   return out + (!j && !f ? '整' : '');
 }
-export function validate(draft: Draft) {
-  for (const sheet of draft.mirror ? [draft.sheets[0]] : draft.sheets) {
-    if (draft.kind === 'expense') { if (total(sheet) > 99999999) throw new Error('报销总额不能超过模板的六位整数金额栏（999,999.99 元）'); for (const r of sheet.rows) if (r.count && !/^\d{1,3}$/.test(r.count)) throw new Error('单据张数须为 0–999 的整数'); }
-    else cents(sheet.fields.amount || '');
-  }
+export function validateSheet(kind: Kind, sheet: Sheet) {
+  if (kind === 'expense') { if (total(sheet) > 99999999) throw new Error('报销总额不能超过模板的六位整数金额栏（999,999.99 元）'); for (const r of sheet.rows) if (r.count && !/^\d{1,3}$/.test(r.count)) throw new Error('单据张数须为 0–999 的整数'); }
+  else cents(sheet.fields.amount || '');
 }
+export function validate(draft: Draft) {
+  if (!draft.sheets.length) throw new Error('请至少保留一张单据');
+  draft.sheets.forEach((sheet, i) => { try { validateSheet(draft.kind, sheet); } catch (e) { throw new Error(`第 ${i + 1} 张单据：${(e as Error).message}`); } });
+}
+export function batchTotal(draft: Draft) { return draft.sheets.reduce((sum, sheet) => sum + (draft.kind === 'expense' ? total(sheet) : cents(sheet.fields.amount || '')), 0); }
 export type Overlay = { text: string; x: number; y: number; w: number; h: number; size?: number; align?: 'left' | 'center' };
 export function overlays(kind: Kind, sheet: Sheet, second = false): Overlay[] {
   const a: Overlay[] = [], f = sheet.fields;
